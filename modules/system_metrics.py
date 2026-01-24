@@ -37,7 +37,7 @@ class SystemMonitor:
 
     def show_top_processes(self):
         # Get top 3 processes by CPU
-        procs = 3
+        procs = []
         for p in psutil.process_iter(['pid', 'name', 'cpu_percent']):
             try:
                 procs.append(p.info)
