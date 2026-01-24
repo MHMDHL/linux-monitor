@@ -1,54 +1,93 @@
 import os
+import csv
 import time
+import grp  # Required for Group Name
+import pwd  # Required for Owner Name
 from pathlib import Path
 from datetime import datetime
 
 class DirectoryMonitor:
-    def __init__(self, directory_path):
-        self.path = Path(directory_path)
-        if not self.path.exists():
-            self.path.mkdir(parents=True)
-        self.files_snapshot = self.take_snapshot()
-
-    def take_snapshot(self):
-        """Creates a dictionary {filename: modification_time}"""
-        snapshot = {}
-        # rglob('*') scans subdirectories too
-        for file in self.path.rglob('*'):
-            if file.is_file():
-                snapshot[str(file)] = file.stat().st_mtime
-        return snapshot
-
-    def scan(self):
-        current_snapshot = self.take_snapshot()
+    def __init__(self, watch_dir, log_file):
+        self.watch_dir = Path(watch_dir)
+        self.log_file = log_file
+        self.previous_state = self._scan_directory()
         
-        # Set logic to find differences
-        old_set = set(self.files_snapshot.keys())
-        new_set = set(current_snapshot.keys())
+        # Initialize Log File with Assignment-Required Headers
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "Timestamp", "Event", "Filename", "Type", 
+                    "Size", "Perms", "Owner", "Group", 
+                    "Created_Time", "Modified_Time", "Accessed_Time"
+                ])
 
-        # 1. Created
-        created = new_set - old_set
-        for f in created:
-            self.log_event("CREATED", f)
+    def _get_file_info(self, filepath):
+        try:
+            stats = filepath.stat()
+            
+            # File Type Logic
+            if filepath.is_dir(): ftype = "Directory"
+            elif filepath.is_symlink(): ftype = "Symlink"
+            else: ftype = "File"
+            
+            # Get Owner & Group Names
+            try:
+                owner_name = pwd.getpwuid(stats.st_uid).pw_name
+                group_name = grp.getgrgid(stats.st_gid).gr_name
+            except KeyError:
+                owner_name = str(stats.st_uid)
+                group_name = str(stats.st_gid)
 
-        # 2. Deleted
-        deleted = old_set - new_set
-        for f in deleted:
-            print(f" File Deleted: {f}")
+            return {
+                "size": stats.st_size,
+                "type": ftype,
+                "perm": oct(stats.st_mode)[-3:],
+                "owner": owner_name,
+                "group": group_name,
+                "ctime": time.ctime(stats.st_ctime),
+                "mtime": time.ctime(stats.st_mtime),
+                "atime": time.ctime(stats.st_atime),
+                "raw_mtime": stats.st_mtime # for comparison
+            }
+        except FileNotFoundError:
+            return None
 
-        # 3. Modified (Same file, different time)
-        common = old_set.intersection(new_set)
-        for f in common:
-            if self.files_snapshot[f]!= current_snapshot[f]:
-                self.log_event("MODIFIED", f)
+    def _scan_directory(self):
+        current_state = {}
+        if not self.watch_dir.exists():
+            return current_state
+        for entry in self.watch_dir.iterdir():
+            info = self._get_file_info(entry)
+            if info:
+                current_state[entry.name] = info
+        return current_state
 
-        # Update snapshot for next loop
-        self.files_snapshot = current_snapshot
+    def log_event(self, event_type, filename, details):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.log_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                timestamp, event_type, filename, 
+                details.get("type"), details.get("size"), details.get("perm"),
+                details.get("owner"), details.get("group"),
+                details.get("ctime"), details.get("mtime"), details.get("atime")
+            ])
+        print(f"[DIR MONITOR] {event_type}: {filename}")
 
-    def log_event(self, event_type, filepath):
-        # Extract Metadata as required
-        path_obj = Path(filepath)
-        stats = path_obj.stat()
-        print(f" {event_type}: {filepath}")
-        print(f"   -> Size: {stats.st_size} bytes")
-        print(f"   -> Owner ID: {stats.st_uid}")
+    def check_changes(self):
+        current_state = self._scan_directory()
+        
+        # Check Created/Modified
+        for filename, info in current_state.items():
+            if filename not in self.previous_state:
+                self.log_event("CREATED", filename, info)
+            elif info['raw_mtime'] != self.previous_state[filename]['raw_mtime']:
+                self.log_event("MODIFIED", filename, info)
+                
+        # Check Deleted
+        for filename in list(self.previous_state.keys()):
+            if filename not in current_state:
+                self.log_event("DELETED", filename, self.previous_state[filename])
+
+        self.previous_state = current_state
