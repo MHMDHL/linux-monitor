@@ -1,4 +1,3 @@
-
 import psutil
 import csv
 import time
@@ -12,7 +11,7 @@ class SystemMonitor:
         if not os.path.exists(self.log_file):
             with open(self.log_file, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow()
+                writer.writerow(["Timestamp", "CPU (%)", "RAM Total (GB)", "RAM Used (GB)", "Disk Usage (%)"])
 
     def log_data(self):
         # CPU (interval=None is non-blocking)
