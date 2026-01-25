@@ -1,5 +1,3 @@
-print("System metrics script started")
-
 import psutil
 import csv
 import time
